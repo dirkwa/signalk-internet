@@ -1,6 +1,6 @@
 {
   "name": "@meri-imperiumi/signalk-internet",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Centralized internet connectivity state detection for Signal K",
   "main": "index.js",
   "scripts": {

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11
+
 ### Changed
 - Periodic probing is now adaptive instead of a fixed 30-second timer (#1). While no hardware mapping matches, or the state is `offline`, the existing Fallback Ping Interval applies. While a hardware mapping reports the uplink up, re-verification slows to a new Online Re-verification Interval (default 300 seconds), and slows further to a new Metered Re-verification Interval (default 600 seconds) while the state is `metered` or `captive`, conserving metered data. Hardware down-transitions were already instant via the delta stream and remain so.
 - Timer-driven probes no longer run — or spend probe data — when a manual `offline` override is active or a hardware mapping resolves the uplink as offline. They also now respect a reachability-gated override (`online`/`metered`/`captive`) instead of silently publishing the raw probe state over the user's forced state.
