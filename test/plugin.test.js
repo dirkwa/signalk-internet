@@ -442,4 +442,163 @@ describe("plugin", () => {
     assert.ok(!recorded, "a blocked speed test must not be recorded");
     plugin.stop();
   });
+
+  test("schema exposes the adaptive re-verification intervals", () => {
+    assert.strictEqual(
+      plugin.schema.properties.onlineVerifyInterval.default,
+      pluginFactory.DEFAULT_ONLINE_VERIFY_INTERVAL,
+    );
+    assert.strictEqual(
+      plugin.schema.properties.meteredVerifyInterval.default,
+      pluginFactory.DEFAULT_METERED_VERIFY_INTERVAL,
+    );
+  });
+
+  test("computeProbeIntervalSeconds follows the cadence ladder", () => {
+    const compute = pluginFactory.computeProbeIntervalSeconds;
+    const config = {
+      pollInterval: 30,
+      onlineVerifyInterval: 300,
+      meteredVerifyInterval: 600,
+    };
+    // Offline, or no hardware mapping: fast fallback interval.
+    assert.strictEqual(
+      compute({ state: "offline", hardwareState: "online", config }),
+      30,
+    );
+    assert.strictEqual(
+      compute({ state: "online", hardwareState: null, config }),
+      30,
+      "with no hardware mapping the probe is the only detector",
+    );
+    // Hardware up + online: slow re-verification.
+    assert.strictEqual(
+      compute({ state: "online", hardwareState: "online", config }),
+      300,
+    );
+    // Hardware up + metered/captive: slowest, to conserve metered data.
+    assert.strictEqual(
+      compute({ state: "metered", hardwareState: "online", config }),
+      600,
+    );
+    assert.strictEqual(
+      compute({ state: "captive", hardwareState: "metered", config }),
+      600,
+    );
+    // Built-in defaults when the config omits the settings.
+    assert.strictEqual(
+      compute({ state: "online", hardwareState: "online", config: {} }),
+      300,
+    );
+    assert.strictEqual(
+      compute({ state: "metered", hardwareState: "online", config: {} }),
+      600,
+    );
+    assert.strictEqual(
+      compute({ state: "offline", hardwareState: null, config: {} }),
+      30,
+    );
+  });
+
+  /**
+   * Flushes pending microtasks so a fire-and-forget probe started inside
+   * the plugin (which the test cannot await) has settled.
+   */
+  const flush = async () => {
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+  };
+
+  test("probes at the slow online cadence while a hardware mapping reports up", async (t) => {
+    let probes = 0;
+    const probe = async () => {
+      probes++;
+      return { state: "online", ping: 5 };
+    };
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    plugin.start({
+      pollInterval: 30,
+      onlineVerifyInterval: 300,
+      meteredVerifyInterval: 600,
+      probe,
+    });
+    const handler = app.getDeltaHandlers()[0];
+    handler({
+      context: "vessels.self",
+      updates: [
+        {
+          values: [
+            { path: "network.providers.starlink.status", value: "online" },
+          ],
+        },
+      ],
+    });
+    await flush();
+    assert.strictEqual(probes, 1, "the initial probe");
+    // 30s pass: the fast fallback interval must not apply while the
+    // hardware mapping reports the uplink up.
+    t.mock.timers.tick(30_000);
+    await flush();
+    assert.strictEqual(probes, 1, "no probe at the fallback interval");
+    t.mock.timers.tick(270_000);
+    await flush();
+    assert.strictEqual(probes, 2, "re-verified at the online interval");
+    plugin.stop();
+  });
+
+  test("probes at the slowest cadence while metered", async (t) => {
+    let probes = 0;
+    const probe = async () => {
+      probes++;
+      return { state: "online", ping: 5 };
+    };
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    plugin.start({
+      pollInterval: 30,
+      onlineVerifyInterval: 300,
+      meteredVerifyInterval: 600,
+      probe,
+    });
+    const handler = app.getDeltaHandlers()[0];
+    handler({
+      context: "vessels.self",
+      updates: [
+        {
+          values: [
+            { path: "network.providers.starlink.status", value: "online" },
+            { path: "watch.state.onWatch", value: true },
+          ],
+        },
+      ],
+    });
+    await flush();
+    assert.strictEqual(probes, 1);
+    // Both the online (300s) and fallback (30s) cadences must not fire.
+    t.mock.timers.tick(300_000);
+    await flush();
+    assert.strictEqual(probes, 1, "metered probes slower than online");
+    t.mock.timers.tick(300_000);
+    await flush();
+    assert.strictEqual(probes, 2, "re-verified at the metered interval");
+    plugin.stop();
+  });
+
+  test("keeps the fast fallback cadence while offline", async (t) => {
+    let probes = 0;
+    const probe = async () => {
+      probes++;
+      return { state: "offline", ping: null };
+    };
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    plugin.start({ pollInterval: 30, onlineVerifyInterval: 300, probe });
+    await flush();
+    assert.strictEqual(probes, 1);
+    t.mock.timers.tick(30_000);
+    await flush();
+    assert.strictEqual(probes, 2, "offline retries at the fallback interval");
+    t.mock.timers.tick(30_000);
+    await flush();
+    assert.strictEqual(probes, 3);
+    plugin.stop();
+  });
 });

@@ -33,6 +33,19 @@ const SPEED_PATH = "network.internet.speed.download";
 const PLUGIN_ID = "signalk-internet";
 
 /**
+ * Default re-verification interval (seconds) while a hardware mapping
+ * reports the uplink up and the resolved state is online.
+ */
+const DEFAULT_ONLINE_VERIFY_INTERVAL = 300;
+
+/**
+ * Default re-verification interval (seconds) while the resolved state is
+ * `metered` or `captive` — deliberately slower than the online interval
+ * to conserve expensive metered data.
+ */
+const DEFAULT_METERED_VERIFY_INTERVAL = 600;
+
+/**
  * Example Status Tiles set shipped for one-tap copy. Discovered by the
  * Status Tiles webapp through the `statusTileExamples` resource type.
  * Pure config — no code runs from it — so it is low-risk to load once
@@ -102,7 +115,20 @@ module.exports = (app) => {
   const setStatus = (app.setPluginStatus || app.setProviderStatus)?.bind(app);
   const unsubscribes = [];
   let evaluator = null;
-  let pollInterval = null;
+  /** @type {NodeJS.Timeout|null} handle of the adaptive probe timer */
+  let probeTimer = null;
+
+  /**
+   * Cancels any pending periodic probe. Factory-scoped so `stop()` can
+   * reach it (the scheduling helpers themselves are start-scoped since
+   * they need the per-start config and evaluator).
+   */
+  function clearProbeTimer() {
+    if (probeTimer) {
+      clearTimeout(probeTimer);
+      probeTimer = null;
+    }
+  }
   // Injectable speed test (tests); falls back to the real HTTPS download.
   let speedTestFn = null;
   /** @type {boolean} plugin started; gates the examples provider */
@@ -123,6 +149,22 @@ module.exports = (app) => {
           type: "integer",
           title: "Fallback Ping Interval (seconds)",
           default: 30,
+          description:
+            "Active probing cadence while the state is offline, or whenever no hardware mapping can report the uplink (the probe is then the only state detector). Hardware down-transitions are picked up instantly from the delta stream, so this interval only governs outage/recovery detection.",
+        },
+        onlineVerifyInterval: {
+          type: "integer",
+          title: "Online Re-verification Interval (seconds)",
+          default: DEFAULT_ONLINE_VERIFY_INTERVAL,
+          description:
+            "How often to re-verify the uplink with an active probe while a hardware mapping reports it up and the resolved state is online. Much slower than the fallback interval: hardware down-transitions arrive instantly over the delta stream, so this only guards against a modem that stays up but stops routing.",
+        },
+        meteredVerifyInterval: {
+          type: "integer",
+          title: "Metered Re-verification Interval (seconds)",
+          default: DEFAULT_METERED_VERIFY_INTERVAL,
+          description:
+            "How often to re-verify while the resolved state is metered or captive. Deliberately slower than the online interval to conserve expensive metered data.",
         },
         stateHeuristics: {
           type: "array",
@@ -211,6 +253,10 @@ module.exports = (app) => {
           ],
         });
         setStatus(`Internet: ${state}${ping != null ? ` (${ping}ms)` : ""}`);
+        // The probe cadence depends on the resolved state, so a published
+        // transition (e.g. online → metered) reschedules the countdown
+        // immediately instead of waiting out the previous interval.
+        scheduleProbe();
       }
 
       /**
@@ -240,15 +286,43 @@ module.exports = (app) => {
         );
       }
 
-      // Adaptive timer loop: periodic re-verification even when a hardware
-      // rule is stable, and the sole source of state when no hardware
-      // plugin is configured.
-      const intervalMs = (config.pollInterval || 30) * 1000;
-      pollInterval = setInterval(() => {
-        evaluator.forceProbe();
-      }, intervalMs);
+      /**
+       * Seconds until the next periodic probe, based on the resolved
+       * state and whether a hardware mapping currently reports the
+       * uplink up. See `computeProbeIntervalSeconds` for the cadence
+       * ladder.
+       */
+      function probeIntervalSeconds() {
+        return computeProbeIntervalSeconds({
+          state: evaluator.current().state,
+          hardwareState: evaluator.hardwareState(),
+          config,
+        });
+      }
 
-      // Kick off an initial probe so the state settles quickly on start.
+      /**
+       * Schedules the next periodic probe at the cadence the current
+       * state calls for. Re-invoked after every published state change
+       * and after each completed probe, so the loop is self-rescheduling
+       * and always adapts to the latest state.
+       */
+      function scheduleProbe() {
+        clearProbeTimer();
+        // A probe still in flight when the plugin stopped can call back
+        // into publish after `stop()` has cleared the evaluator; do not
+        // schedule anything in that case.
+        if (!evaluator) return;
+        probeTimer = setTimeout(() => {
+          probeTimer = null;
+          Promise.resolve(evaluator.forceProbe())
+            .catch((err) => app.error(`Probe failed: ${err.message}`))
+            .finally(scheduleProbe);
+        }, probeIntervalSeconds() * 1000);
+      }
+
+      // Kick off an initial probe so the state settles quickly on start,
+      // with the adaptive timer loop running behind it.
+      scheduleProbe();
       evaluator.forceProbe();
 
       // Send meta so consumers know the units and meaning of our paths.
@@ -293,10 +367,7 @@ module.exports = (app) => {
 
     stop: () => {
       running = false;
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
+      clearProbeTimer();
       for (const f of unsubscribes) f();
       unsubscribes.length = 0;
       evaluator = null;
@@ -525,9 +596,47 @@ function resolveOverride(body) {
   return undefined;
 }
 
+/**
+ * Computes the seconds until the next periodic probe.
+ *
+ * Cadence ladder, slowest for the states that cost the most data:
+ *
+ *   - `offline`, or no hardware mapping matches: the fast fallback
+ *     interval. With no mapping the active probe is the only state
+ *     detector, so outage recovery must be noticed quickly; with a
+ *     mapping its down-transition already arrives instantly via the
+ *     delta stream and this interval only retries verification.
+ *   - `online` with a hardware mapping up: slow re-verification — the
+ *     delta stream handles real down-transitions, this only catches a
+ *     modem that stays "up" but stops routing.
+ *   - `metered`/`captive` with a hardware mapping up: slowest, to
+ *     conserve metered data.
+ *
+ * @param {object} args
+ * @param {string} args.state - Current resolved connectivity state
+ * @param {string|null} args.hardwareState - State of the first matching
+ *   hardware mapping, or null when none matches
+ * @param {object} args.config - Plugin configuration
+ * @returns {number} seconds until the next probe
+ */
+function computeProbeIntervalSeconds({ state, hardwareState, config }) {
+  const cfg = config || {};
+  if (state === "offline" || hardwareState === null) {
+    return cfg.pollInterval || 30;
+  }
+  if (state === "metered" || state === "captive") {
+    return cfg.meteredVerifyInterval || DEFAULT_METERED_VERIFY_INTERVAL;
+  }
+  return cfg.onlineVerifyInterval || DEFAULT_ONLINE_VERIFY_INTERVAL;
+}
+
 module.exports.PLUGIN_ID = PLUGIN_ID;
 module.exports.STATE_PATH = STATE_PATH;
 module.exports.PING_PATH = PING_PATH;
 module.exports.SPEED_PATH = SPEED_PATH;
 module.exports.DEFAULT_CONNECTION_MAPPINGS = DEFAULT_CONNECTION_MAPPINGS;
 module.exports.DEFAULT_STATE_HEURISTICS = DEFAULT_STATE_HEURISTICS;
+module.exports.DEFAULT_ONLINE_VERIFY_INTERVAL = DEFAULT_ONLINE_VERIFY_INTERVAL;
+module.exports.DEFAULT_METERED_VERIFY_INTERVAL =
+  DEFAULT_METERED_VERIFY_INTERVAL;
+module.exports.computeProbeIntervalSeconds = computeProbeIntervalSeconds;

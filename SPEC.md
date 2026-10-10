@@ -84,7 +84,7 @@ To minimize detection latency and avoid unnecessary timer churn:
 
 * **Event-Driven Instant Down:** Subscribes to upstream hardware paths using `app.subscriptionManager`. If an uplink plugin reports `down` or `disconnected`, the state transitions to `offline` with 0ms delay.
 * **Targeted Up Verification:** When an uplink flips to `connected`, the plugin fires a single targeted HTTP probe to confirm actual internet routing before publishing `online` or `captive`.
-* **Adaptive Timer Loop:** Serves as a fallback for setups without dedicated hardware plugins, or for periodic re-verification during stable connections.
+* **Adaptive Timer Loop:** The periodic probe cadence adapts to the resolved state. Without a matching hardware mapping (or while `offline`) the fast Fallback Ping Interval applies, since the probe is then the only state detector. While a hardware mapping reports the uplink up, re-verification slows to the Online Re-verification Interval, and slows further to the Metered Re-verification Interval while the state is `metered` or `captive` to conserve metered data. No periodic probe runs while a manual `offline` override is active or a hardware mapping resolves the uplink as down.
 
 ---
 
@@ -98,6 +98,16 @@ To minimize detection latency and avoid unnecessary timer churn:
       "type": "integer",
       "title": "Fallback Ping Interval (seconds)",
       "default": 30
+    },
+    "onlineVerifyInterval": {
+      "type": "integer",
+      "title": "Online Re-verification Interval (seconds)",
+      "default": 300
+    },
+    "meteredVerifyInterval": {
+      "type": "integer",
+      "title": "Metered Re-verification Interval (seconds)",
+      "default": 600
     },
     "stateHeuristics": {
       "type": "array",

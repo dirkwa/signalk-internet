@@ -499,4 +499,78 @@ describe("evaluator", () => {
       { state: "online", ping: 2 },
     ]);
   });
+
+  test("hardwareState returns the first matching mapping's state, else null", () => {
+    const ev = createEvaluator({
+      config: makeConfig({}, [
+        {
+          path: "uplink.status",
+          matchValue: "online",
+          resultingState: "online",
+        },
+      ]),
+    });
+    assert.strictEqual(ev.hardwareState(), null);
+    ev.set("uplink.status", "online");
+    assert.strictEqual(ev.hardwareState(), "online");
+  });
+
+  test("forceProbe skips the network probe when a hardware mapping resolves offline", async () => {
+    let probed = 0;
+    const probe = async () => {
+      probed++;
+      return { state: "online", ping: 5 };
+    };
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig({}, [
+        {
+          path: "uplink.status",
+          matchValue: "offline",
+          resultingState: "offline",
+        },
+      ]),
+      onState: (state) => seen.push(state),
+      probe,
+    });
+    ev.set("uplink.status", "offline");
+    await ev.forceProbe();
+    assert.strictEqual(probed, 0, "hardware offline must not spend probe data");
+    assert.strictEqual(ev.current().state, "offline");
+  });
+
+  test("forceProbe skips the network probe under an offline override", async () => {
+    let probed = 0;
+    const probe = async () => {
+      probed++;
+      return { state: "online", ping: 5 };
+    };
+    const ev = createEvaluator({
+      config: makeConfig(),
+      onState: () => {},
+      probe,
+    });
+    ev.setOverride("offline");
+    await ev.forceProbe();
+    assert.strictEqual(probed, 0, "forced offline must not spend probe data");
+    assert.strictEqual(ev.current().state, "offline");
+  });
+
+  test("forceProbe publishes under a reachability-gated override", async () => {
+    let n = 0;
+    const online = async () => ({ state: "online", ping: ++n });
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig(),
+      onState: (state, ping) => seen.push({ state, ping }),
+      probe: online,
+    });
+    ev.setOverride("metered");
+    await new Promise((r) => setTimeout(r, 10));
+    seen.length = 0;
+    // A timer-driven re-verification must not silently clear the forced
+    // state; it publishes under the override instead.
+    await ev.forceProbe();
+    assert.deepStrictEqual(seen, [{ state: "metered", ping: 2 }]);
+  });
 });
