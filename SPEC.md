@@ -74,7 +74,7 @@ The plugin evaluates connection state using a top-down deterministic rules engin
 1. **Manual Override:** Forced setting via REST/Web UI (e.g., force `metered` for an offshore passage).
 2. **Contextual Heuristics:** Inferred vessel state (e.g., if `watch.state.onWatch` is `true`, assume offshore and set to `metered`).
 3. **Hardware Mappings:** Match specific Signal K deltas from per-uplink plugins (e.g., `@meri-imperiumi/signalk-teltonika-rutx11`, `signalk-starlink`).
-4. **Active Verification & Fallback Timer:** If no hardware state matches, the plugin falls back to an active polling loop (e.g., every 30s) testing DNS resolution and HTTP captive portal endpoints (`[http://captive.apple.com/hotspot-detect.html](http://captive.apple.com/hotspot-detect.html)`).
+4. **Active Verification & Fallback Timer:** If no hardware state matches, the plugin falls back to an active polling loop (e.g., every 30s) testing DNS resolution and a configurable captive-portal endpoint: Apple's HTTPS hotspot-detect (default, body-marker check) or Google's plain-HTTP 204 connectivity check. With **No probe** selected, this layer is skipped entirely and the hardware mappings alone decide the state.
 
 ---
 

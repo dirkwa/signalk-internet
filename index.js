@@ -17,7 +17,11 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 const { createEvaluator } = require("./lib/evaluator.js");
-const { probeWithRetry } = require("./lib/prober.js");
+const {
+  probeWithRetry,
+  DEFAULT_PROBE_PROVIDER,
+  PROVIDERS,
+} = require("./lib/prober.js");
 const { guard, runSpeedTest, GuardError } = require("./lib/speedtest.js");
 
 /**
@@ -145,6 +149,17 @@ module.exports = (app) => {
     schema: {
       type: "object",
       properties: {
+        probeProvider: {
+          type: "string",
+          title: "Connectivity Probe",
+          default: DEFAULT_PROBE_PROVIDER,
+          enum: ["apple", "google", "none"],
+          options: {
+            enum_titles: ["Apple", "Google", "No probe"],
+          },
+          description:
+            "Active probe verifying that the uplink actually routes to the internet. Apple sends a small HTTPS request to its captive-portal detection endpoint and checks the body; Google sends a plain HTTP request expecting status 204 — no TLS handshake and no response body, cheaper on metered uplinks. Both detect captive portals. 'No probe' never contacts an outside service: the state is taken on trust from hardware mappings (Starlink, modem status) and contextual rules alone, defaulting to offline when none matches.",
+        },
         pollInterval: {
           type: "integer",
           title: "Fallback Ping Interval (seconds)",
@@ -232,6 +247,20 @@ module.exports = (app) => {
             : raw.stateHeuristics,
       };
 
+      // Probe provider selection. Schema restricts the pulldown to the
+      // shipped values, but saved configs can carry anything — fall
+      // back to the default rather than throwing on every probe.
+      let probeProvider =
+        raw.probeProvider === undefined
+          ? DEFAULT_PROBE_PROVIDER
+          : raw.probeProvider;
+      if (probeProvider !== "none" && !PROVIDERS[probeProvider]) {
+        app.error(
+          `${PLUGIN_ID}: unknown probe provider "${probeProvider}", using "${DEFAULT_PROBE_PROVIDER}"`,
+        );
+        probeProvider = DEFAULT_PROBE_PROVIDER;
+      }
+
       /**
        * Publishes a connectivity delta to the Signal K bus.
        *
@@ -260,14 +289,24 @@ module.exports = (app) => {
       }
 
       /**
-       * Active probe wrapper used by the evaluator. Uses the retrying
-       * variant to ride through transient DNS hiccups. Tests may inject a
+       * Active probe used by the evaluator. Uses the retrying variant
+       * to ride through transient DNS hiccups. Tests may inject a
        * custom probe via `options.probe` to avoid hitting the network.
+       * The "No probe" provider (or a failed probe) leaves it null and
+       * the evaluator falls back to event-driven hardware mappings.
        */
-      const probe =
-        typeof raw.probe === "function" ? raw.probe : () => probeWithRetry();
+      let activeProbe = null;
+      if (typeof raw.probe === "function") {
+        activeProbe = raw.probe;
+      } else if (probeProvider !== "none") {
+        activeProbe = () => probeWithRetry({ provider: probeProvider });
+      }
 
-      evaluator = createEvaluator({ config, onState: publish, probe });
+      evaluator = createEvaluator({
+        config,
+        onState: publish,
+        probe: activeProbe,
+      });
       speedTestFn = typeof raw.speedtest === "function" ? raw.speedtest : null;
 
       // Subscribe to the Signal K paths the heuristic and hardware rules
@@ -312,6 +351,9 @@ module.exports = (app) => {
         // into publish after `stop()` has cleared the evaluator; do not
         // schedule anything in that case.
         if (!evaluator) return;
+        // "No probe" mode is fully event-driven: forceProbe would only
+        // re-publish the hardware-derived state, so no timer is needed.
+        if (!activeProbe) return;
         probeTimer = setTimeout(() => {
           probeTimer = null;
           Promise.resolve(evaluator.forceProbe())
@@ -636,6 +678,7 @@ module.exports.PING_PATH = PING_PATH;
 module.exports.SPEED_PATH = SPEED_PATH;
 module.exports.DEFAULT_CONNECTION_MAPPINGS = DEFAULT_CONNECTION_MAPPINGS;
 module.exports.DEFAULT_STATE_HEURISTICS = DEFAULT_STATE_HEURISTICS;
+module.exports.DEFAULT_PROBE_PROVIDER = DEFAULT_PROBE_PROVIDER;
 module.exports.DEFAULT_ONLINE_VERIFY_INTERVAL = DEFAULT_ONLINE_VERIFY_INTERVAL;
 module.exports.DEFAULT_METERED_VERIFY_INTERVAL =
   DEFAULT_METERED_VERIFY_INTERVAL;

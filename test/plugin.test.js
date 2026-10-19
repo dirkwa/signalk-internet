@@ -19,6 +19,7 @@ function createMockApp() {
   const messages = [];
   const deltaHandlers = [];
   const subscriptions = [];
+  const errors = [];
   const router = {
     routes: [],
     get(path, h) {
@@ -34,7 +35,10 @@ function createMockApp() {
   return {
     selfId: "urn:mrn:imo:mmsi:123456789",
     debug: () => {},
-    error: () => {},
+    error: (msg) => {
+      errors.push(msg);
+    },
+    getErrors: () => errors,
     setPluginStatus: (s) => {
       status = s;
     },
@@ -95,6 +99,19 @@ describe("plugin", () => {
       plugin.start({ pollInterval: 1, probe: fakeProbe }),
     );
     assert.doesNotThrow(() => plugin.stop());
+  });
+
+  test("schema exposes the probe provider pulldown", () => {
+    const prop = plugin.schema.properties.probeProvider;
+    assert.ok(prop, "probeProvider option exists");
+    assert.strictEqual(prop.type, "string");
+    assert.strictEqual(prop.default, "apple");
+    assert.deepStrictEqual(prop.enum, ["apple", "google", "none"]);
+    assert.deepStrictEqual(prop.options.enum_titles, [
+      "Apple",
+      "Google",
+      "No probe",
+    ]);
   });
 
   test("schema ships a Starlink default in connectionMappings", () => {
@@ -599,6 +616,85 @@ describe("plugin", () => {
     t.mock.timers.tick(30_000);
     await flush();
     assert.strictEqual(probes, 3);
+    plugin.stop();
+  });
+
+  test("no-probe mode trusts hardware mappings and never probes", async () => {
+    // No injected probe: if the plugin still probed, it would hit the
+    // real network and this test would only pass by luck of connectivity.
+    // In no-probe mode nothing is contacted and the state follows the
+    // hardware mappings alone.
+    plugin.start({ pollInterval: 30, probeProvider: "none" });
+    await flush();
+
+    const stateValues = () =>
+      app
+        .getMessages()
+        .flatMap((m) => m.delta.updates || [])
+        .flatMap((u) => u.values || [])
+        .filter((v) => v.path === "network.internet.state")
+        .map((v) => v.value);
+    const pingValues = () =>
+      app
+        .getMessages()
+        .flatMap((m) => m.delta.updates || [])
+        .flatMap((u) => u.values || [])
+        .filter((v) => v.path === "network.internet.ping")
+        .map((v) => v.value);
+
+    // Initial settle: no mapping matched and the state never left the
+    // offline floor, so nothing has been published yet.
+    assert.deepStrictEqual(stateValues(), []);
+
+    // The Starlink mapping reports the uplink up: trusted as-is, no
+    // verify probe.
+    const handler = app.getDeltaHandlers()[0];
+    handler({
+      context: "vessels.self",
+      updates: [
+        {
+          values: [
+            { path: "network.providers.starlink.status", value: "online" },
+          ],
+        },
+      ],
+    });
+    await flush();
+    assert.deepStrictEqual(stateValues(), ["online"]);
+    assert.deepStrictEqual(pingValues(), [null], "no probe ran");
+
+    // The uplink reporting down is an instant transition.
+    handler({
+      context: "vessels.self",
+      updates: [
+        {
+          values: [
+            { path: "network.providers.starlink.status", value: "offline" },
+          ],
+        },
+      ],
+    });
+    await flush();
+    assert.deepStrictEqual(stateValues(), ["online", "offline"]);
+    plugin.stop();
+  });
+
+  test("an unknown probe provider falls back to Apple with an error", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let probes = 0;
+    plugin.start({
+      pollInterval: 30,
+      probeProvider: "bing",
+      probe: async () => {
+        probes++;
+        return { state: "online", ping: 5 };
+      },
+    });
+    await flush();
+    assert.ok(
+      app.getErrors().some((e) => e.includes("unknown probe provider")),
+    );
+    assert.strictEqual(probes, 1, "injected probe still wired");
     plugin.stop();
   });
 });

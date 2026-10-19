@@ -574,3 +574,109 @@ describe("evaluator", () => {
     assert.deepStrictEqual(seen, [{ state: "metered", ping: 2 }]);
   });
 });
+
+describe("no-probe mode (trusts hardware mappings)", () => {
+  const onlineMapping = [
+    {
+      path: "network.providers.starlink.status",
+      matchValue: "online",
+      resultingState: "online",
+    },
+  ];
+
+  test("stays offline with no mappings and never publishes a floor delta", async () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig(),
+      onState: (state, ping) => seen.push({ state, ping }),
+      // No probe: "No probe" provider. Must never contact anything.
+    });
+    await ev.forceProbe();
+    // The offline floor is the engine's initial state, so the publish
+    // is deduped — no delta is emitted until something actually changes.
+    assert.deepStrictEqual(seen, []);
+    assert.strictEqual(ev.current().state, "offline");
+  });
+
+  test("a hardware mapping reporting up publishes its state directly", () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig({}, onlineMapping),
+      onState: (state, ping) => seen.push({ state, ping }),
+    });
+    ev.set("network.providers.starlink.status", "online");
+    assert.deepStrictEqual(seen, [{ state: "online", ping: null }]);
+    assert.strictEqual(ev.current().state, "online");
+  });
+
+  test("heuristics clamp the trusted hardware base", () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig(
+        {
+          heuristics: [
+            {
+              path: "watch.state.onWatch",
+              triggerValue: "true",
+              resultingState: "metered",
+            },
+          ],
+        },
+        onlineMapping,
+      ),
+      onState: (state) => seen.push(state),
+    });
+    ev.set("network.providers.starlink.status", "online");
+    assert.strictEqual(ev.current().state, "online");
+    ev.set("watch.state.onWatch", true);
+    assert.strictEqual(ev.current().state, "metered");
+  });
+
+  test("a non-offline override gates on the hardware mapping", () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig({}, onlineMapping),
+      onState: (state) => seen.push(state),
+    });
+    ev.setOverride("online");
+    // No mapping reports the uplink, so the override cannot claim
+    // connectivity (the offline floor is already current, so nothing is
+    // published).
+    assert.strictEqual(ev.current().state, "offline");
+    assert.deepStrictEqual(seen, []);
+    // Once the uplink is reported up, the forced state is honored.
+    ev.set("network.providers.starlink.status", "online");
+    assert.strictEqual(ev.current().state, "online");
+    assert.deepStrictEqual(seen, ["online"]);
+    // And a metered override applies on top of the trusted uplink.
+    ev.setOverride("metered");
+    assert.strictEqual(ev.current().state, "metered");
+    assert.deepStrictEqual(seen, ["online", "metered"]);
+  });
+
+  test("hardware instant-down still wins immediately", () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig({}, onlineMapping),
+      onState: (state) => seen.push(state),
+    });
+    ev.set("network.providers.starlink.status", "online");
+    assert.strictEqual(ev.current().state, "online");
+    ev.set("network.providers.starlink.status", "offline");
+    assert.strictEqual(ev.current().state, "offline");
+  });
+
+  test("forceProbe re-syncs the state from the mappings", () => {
+    const seen = [];
+    const ev = createEvaluator({
+      config: makeConfig({}, onlineMapping),
+      onState: (state) => seen.push(state),
+    });
+    ev.set("network.providers.starlink.status", "online");
+    assert.strictEqual(ev.current().state, "online");
+    ev._cache.delete("network.providers.starlink.status");
+    return ev.forceProbe().then(() => {
+      assert.strictEqual(ev.current().state, "offline");
+    });
+  });
+});
