@@ -132,7 +132,10 @@ describe("status-tiles examples provider", () => {
     plugin.stop();
     plugin.start({ pollInterval: 60, probe: fakeProbe });
     plugin.stop();
-    assert.strictEqual(app.getProviders().length, 1);
+    const examples = app
+      .getProviders()
+      .filter((p) => p.type === "statusTileExamples");
+    assert.strictEqual(examples.length, 1);
   });
 
   test("does not crash and logs once when the server has no registry", () => {

@@ -16,6 +16,8 @@
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 
+const pkg = require("./package.json");
+
 const { createEvaluator } = require("./lib/evaluator.js");
 const {
   probeWithRetry,
@@ -59,6 +61,61 @@ const DEFAULT_METERED_VERIFY_INTERVAL = 600;
 const STATUS_TILES_EXAMPLES = JSON.parse(
   readFileSync(join(__dirname, "status-tiles-examples.json"), "utf8"),
 );
+
+/** Where the server serves `public/` (the package is a `signalk-webapp`). */
+const PUBLIC_BASE = `/${pkg.name}`;
+
+/**
+ * Plotter Extensions manifest (Freeboard-SK and other chart plotters that
+ * read the `plotterExtensions` resource type). A toolbar button opens a
+ * small window with the live state, ping and Starlink values and the
+ * manual override; a background runtime colours the button by state.
+ * Pages are served from `public/plotterext/`.
+ */
+const PLOTTER_EXTENSION = {
+  name: "Internet Connectivity",
+  description:
+    "Internet state at a glance on the chart, with the manual override (online, metered, offline).",
+  version: pkg.version,
+  apiVersion: "1",
+  requires: ["buttons", "panels.iframe", "signalk.stream"],
+  optional: [
+    "windows",
+    "background.iframe",
+    "buttons.decorations",
+    "nightMode",
+  ],
+  buttons: [
+    {
+      id: "internet-status",
+      title: "Internet",
+      slot: "mapToolbar",
+      icon: "satellite_alt",
+      action: {
+        type: "toggleWindow",
+        panel: "internet-status",
+        geometry: { anchor: "top-right", width: 320, height: 360 },
+        restoreKey: "internet-status",
+      },
+    },
+  ],
+  panels: [
+    {
+      id: "internet-status",
+      title: "Internet",
+      type: "iframe",
+      url: `${PUBLIC_BASE}/plotterext/status.html`,
+    },
+  ],
+  background: [
+    {
+      id: "internet-indicator",
+      title: "Internet state on the toolbar button",
+      type: "iframe",
+      url: `${PUBLIC_BASE}/plotterext/indicator.html`,
+    },
+  ],
+};
 
 /**
  * Default hardware uplink mappings shipped out of the box.
@@ -135,9 +192,9 @@ module.exports = (app) => {
   }
   // Injectable speed test (tests); falls back to the real HTTPS download.
   let speedTestFn = null;
-  /** @type {boolean} plugin started; gates the examples provider */
+  /** @type {boolean} plugin started; gates the resource providers */
   let running = false;
-  /** @type {boolean} resource provider registered with the server */
+  /** @type {boolean} resource providers registered with the server */
   let providerRegistered = false;
 
   const plugin = {
@@ -230,7 +287,7 @@ module.exports = (app) => {
 
     start: (options) => {
       running = true;
-      registerExamplesProvider();
+      registerResourceProviders();
       const raw = options || {};
       // Fall back to the shipped Starlink mapping when the user hasn't
       // configured any (undefined). An explicit empty array means the user
@@ -450,34 +507,45 @@ module.exports = (app) => {
   }
 
   /**
-   * Registers a read-only `statusTileExamples` resource provider so the
-   * Status Tiles webapp can offer this plugin's example tiles for
-   * one-tap copy. Provision is gated by `running` (returns {} when
-   * stopped, so a disabled plugin disappears from the discovery list
-   * with no stale entries) and registered at most once per plugin
-   * instance — a restart (stop+start on a config save) must not
-   * double-register. Skipped silently on servers without the resource
-   * provider registry (older servers); example discovery simply won't
-   * include this plugin's set.
+   * Registers this plugin's read-only resource providers: the
+   * `statusTileExamples` set the Status Tiles webapp offers for one-tap
+   * copy, and the `plotterExtensions` manifest that puts the internet
+   * status button and window into chart plotters such as Freeboard-SK.
+   * Provision is gated by `running` (returns {} when stopped, so a
+   * disabled plugin disappears from the discovery lists with no stale
+   * entries) and registered at most once per plugin instance — a restart
+   * (stop+start on a config save) must not double-register. Skipped on
+   * servers without the resource provider registry (older servers).
    */
-  function registerExamplesProvider() {
+  function registerResourceProviders() {
     if (providerRegistered) return;
     if (typeof app.registerResourceProvider !== "function") {
       app.error(
-        `${PLUGIN_ID}: server has no resource provider registry; status-tiles examples disabled`,
+        `${PLUGIN_ID}: server has no resource provider registry; status-tiles examples and the chart plotter extension disabled`,
       );
       return;
     }
+    registerReadOnlyProvider("statusTileExamples", STATUS_TILES_EXAMPLES);
+    registerReadOnlyProvider("plotterExtensions", PLOTTER_EXTENSION);
+    providerRegistered = true;
+  }
+
+  /**
+   * Registers a provider serving one fixed resource keyed by the plugin id.
+   *
+   * @param {string} type - Resource type
+   * @param {object} resource - The resource served while running
+   */
+  function registerReadOnlyProvider(type, resource) {
     app.registerResourceProvider({
-      type: "statusTileExamples",
+      type,
       methods: {
-        listResources: async () =>
-          running ? { [PLUGIN_ID]: STATUS_TILES_EXAMPLES } : {},
+        listResources: async () => (running ? { [PLUGIN_ID]: resource } : {}),
         getResource: async (id) => {
           if (!running || id !== PLUGIN_ID) {
-            throw new Error(`No such statusTileExamples resource: ${id}`);
+            throw new Error(`No such ${type} resource: ${id}`);
           }
-          return STATUS_TILES_EXAMPLES;
+          return resource;
         },
         setResource: async () => {
           throw new Error(`${PLUGIN_ID} is a read-only provider`);
@@ -487,7 +555,6 @@ module.exports = (app) => {
         },
       },
     });
-    providerRegistered = true;
   }
 
   /**
@@ -535,6 +602,21 @@ module.exports = (app) => {
    * @param {object} router - Express router
    */
   plugin.registerWithRouter = (router) => {
+    // Plotter users who are not administrators still see whether the state
+    // is manual; servers without router.access keep every route admin-only.
+    const readonly = router.access ? router.access("readonly") : router;
+
+    /**
+     * GET /override — the manual state override currently set, or null.
+     */
+    readonly.get("/override", (_req, res) => {
+      if (!evaluator) {
+        res.status(503).json({ message: "Plugin not started" });
+        return;
+      }
+      res.json({ override: evaluator.getOverride() });
+    });
+
     /**
      * PUT /override — set or clear the manual state override.
      * Body: `{ "state": "online"|"offline"|"metered"|"captive"|null }`
@@ -673,6 +755,7 @@ function computeProbeIntervalSeconds({ state, hardwareState, config }) {
 }
 
 module.exports.PLUGIN_ID = PLUGIN_ID;
+module.exports.PLOTTER_EXTENSION = PLOTTER_EXTENSION;
 module.exports.STATE_PATH = STATE_PATH;
 module.exports.PING_PATH = PING_PATH;
 module.exports.SPEED_PATH = SPEED_PATH;

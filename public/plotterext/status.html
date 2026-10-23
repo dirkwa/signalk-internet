@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="day">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Internet</title>
+    <link rel="stylesheet" href="./status.css" />
+    <script type="module" src="./status.js"></script>
+  </head>
+  <body>
+    <section class="state" id="state" data-state="unknown">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="state-label" id="state-label">Unknown</span>
+      <span class="source" id="source"></span>
+    </section>
+
+    <section>
+      <h2>Override</h2>
+      <div class="choices" id="choices" role="radiogroup" aria-label="Override"></div>
+      <p class="message" id="message" role="status"></p>
+    </section>
+
+    <section>
+      <h2>Connection</h2>
+      <dl class="values" id="values"></dl>
+    </section>
+  </body>
+</html>

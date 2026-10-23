@@ -303,6 +303,7 @@ describe("plugin", () => {
     plugin.start({ pollInterval: 60, probe: fakeProbe });
     plugin.registerWithRouter(app.router);
     const methods = app.router.routes.map((r) => `${r.method} ${r.path}`);
+    assert.ok(methods.includes("get /override"));
     assert.ok(methods.includes("put /override"));
     assert.ok(methods.includes("post /speedtest"));
     plugin.stop();
@@ -319,6 +320,47 @@ describe("plugin", () => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.override, "metered");
     plugin.stop();
+  });
+
+  test("override GET reports the override set by PUT, null when cleared", () => {
+    plugin.start({ pollInterval: 60, probe: fakeProbe });
+    plugin.registerWithRouter(app.router);
+    const route = (method) =>
+      app.router.routes.find(
+        (r) => r.method === method && r.path === "/override",
+      );
+    const read = () => {
+      const res = makeRes();
+      route("get").handler({}, res);
+      return res;
+    };
+    assert.strictEqual(read().body.override, null);
+    route("put").handler({ body: { state: "metered" } }, makeRes());
+    assert.strictEqual(read().body.override, "metered");
+    route("put").handler({ body: { state: null } }, makeRes());
+    assert.strictEqual(read().body.override, null);
+    plugin.stop();
+  });
+
+  test("override GET returns 503 before start", () => {
+    plugin.registerWithRouter(app.router);
+    const get = app.router.routes.find(
+      (r) => r.method === "get" && r.path === "/override",
+    );
+    const res = makeRes();
+    get.handler({}, res);
+    assert.strictEqual(res.statusCode, 503);
+  });
+
+  test("override GET is open to read-only users where the server allows it", () => {
+    const levels = [];
+    app.router.access = (level) => {
+      levels.push(level);
+      return app.router;
+    };
+    plugin.registerWithRouter(app.router);
+    assert.deepStrictEqual(levels, ["readonly"]);
+    delete app.router.access;
   });
 
   test("override PUT accepts the legacy forceMetered boolean", () => {

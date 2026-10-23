@@ -1,0 +1,158 @@
+/* Same colour system as the webapp (index.html), sized for a small
+   window over the chart. Night mode follows the host. */
+:root {
+  --bg-base: #080a0c;
+  --color-green: #8dfcbb;
+  --color-teal: #66c6db;
+  --color-orange: #fca847;
+  --color-red: #ff5e5e;
+  --color-grey: #666666;
+  --text-main: #ffffff;
+  --text-muted: #a0a0b5;
+}
+
+:root[data-mode="night"] {
+  --color-green: #4a7555;
+  --color-teal: #33616b;
+  --color-orange: #8a5318;
+  --color-red: #8f3333;
+  --color-grey: #333333;
+  --text-main: #c4c4c4;
+  --text-muted: #666677;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0.75rem;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+}
+
+section + section {
+  margin-top: 1rem;
+}
+
+h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-teal);
+}
+
+.state {
+  --theme-color: var(--color-grey);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--theme-color);
+}
+
+.state[data-state="online"] {
+  --theme-color: var(--color-green);
+}
+
+.state[data-state="metered"] {
+  --theme-color: var(--color-orange);
+}
+
+.state[data-state="captive"] {
+  --theme-color: var(--color-teal);
+}
+
+.state[data-state="offline"] {
+  --theme-color: var(--color-red);
+}
+
+.dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: none;
+  background: var(--theme-color);
+}
+
+.state-label {
+  font-family: ui-monospace, "Fira Code", monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.source {
+  margin-left: auto;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+}
+
+.choices button {
+  min-height: 2.5rem;
+  padding: 0 0.25rem;
+  font:
+    600 0.85rem system-ui,
+    -apple-system,
+    sans-serif;
+  color: var(--text-main);
+  background: transparent;
+  border: 1px solid var(--color-grey);
+  cursor: pointer;
+}
+
+.choices button[aria-checked="true"] {
+  color: var(--bg-base);
+  background: var(--color-teal);
+  border-color: var(--color-teal);
+}
+
+.choices button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.message {
+  min-height: 1.2em;
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.message.error {
+  color: var(--color-red);
+}
+
+.values {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.values dt {
+  color: var(--text-muted);
+}
+
+.values dd {
+  margin: 0;
+  text-align: right;
+  font-family: ui-monospace, "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.values [hidden] {
+  display: none;
+}

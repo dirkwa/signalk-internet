@@ -28,3 +28,9 @@ The probe runs at a cadence that adapts to the situation:
 Each Apple probe costs a few kilobytes of traffic (the TLS handshake dominates; the response body is under 100 bytes), while a Google probe is a fraction of that (plain HTTP, empty 204 response), so at the 30-second fallback cadence probing works out to at most roughly 15 MB per day. That is why re-verification while a hardware mapping reports the uplink up is much slower. On very tight uplinks, switch to the Google probe, raise all three intervals, or pick **No probe** in the plugin configuration.
 
 No periodic probe runs at all while a manual `offline` override is active or a hardware mapping resolves the uplink as down — those states are authoritative and cost zero probe traffic.
+
+## On the chart
+
+In chart plotters that support [Plotter Extensions](https://github.com/SignalK/freeboard-sk/blob/master/docs/api/plotter-extensions-api.md), such as Freeboard-SK, the plugin adds an **Internet** button (a satellite dish) to the map toolbar. It opens a small window with the current state, the manual override (**Auto**, **Online**, **Metered**, **Offline**) and the connection values: ping, the last speed test, and the Starlink status, throughput and latency and the maritime zone when signalk-starlink and signalk-starlink-offshore are running. The button turns to a warning while the state is `metered` or `captive` and to an alarm while `offline`, so a costly or lost connection shows without opening the window. Switching the override goes through the plugin's REST API, which the server reserves for administrators.
+
+The extension pages use the [signalk-plotterext-bus](https://github.com/joelkoz/signalk-plotterext-bus) client, bundled into `public/plotterext/vendor/` so the plugin keeps shipping without a build step. After bumping that devDependency, refresh the bundle with `npm run vendor:plotterext`.

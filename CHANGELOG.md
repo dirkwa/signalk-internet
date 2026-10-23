@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- An **Internet** button for chart plotters with Plotter Extensions support, such as Freeboard-SK: it opens a window with the current state, the manual override (Auto, Online, Metered, Offline) and the connection values, including the Starlink status, throughput and latency and the maritime zone when those plugins run. The button shows a warning while the state is `metered` or `captive` and an alarm while `offline`.
+- `GET /plugins/signalk-internet/override` returns the manual override currently set (`null` when automatic), also to read-only users on servers that support per-route access.
 - A **Connectivity Probe** pulldown in the plugin configuration (#2): **Apple** (default, unchanged), **Google**, or **No probe**. Google sends a plain HTTP request to `connectivitycheck.gstatic.com/generate_204` and expects status 204 — no TLS handshake and no response body, cheaper on metered uplinks, and captive-portal redirects are detected as HTTP 3xx instead of TLS certificate failures. **No probe** never contacts an outside service: the state is taken on trust from hardware mappings (Starlink, modem status) and contextual rules alone, defaulting to `offline` when none matches, and manual overrides are gated on the hardware mappings.
 
 ### Changed
