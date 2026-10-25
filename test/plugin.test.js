@@ -101,6 +101,51 @@ describe("plugin", () => {
     assert.doesNotThrow(() => plugin.stop());
   });
 
+  /** Every value published for `path`, in order. */
+  const published = (path) =>
+    app
+      .getMessages()
+      .flatMap((m) => m.delta.updates || [])
+      .flatMap((u) => u.values || [])
+      .filter((v) => v.path === path)
+      .map((v) => v.value);
+
+  test("stop clears the published state and ping", async () => {
+    plugin.start({ pollInterval: 60, probe: fakeProbe });
+    for (
+      let i = 0;
+      i < 50 && published("network.internet.state").length === 0;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.deepStrictEqual(published("network.internet.state"), ["online"]);
+    plugin.stop();
+    assert.deepStrictEqual(published("network.internet.state"), [
+      "online",
+      null,
+    ]);
+    assert.deepStrictEqual(published("network.internet.ping"), [5, null]);
+  });
+
+  test("a probe that answers after stop publishes nothing", async () => {
+    let answer;
+    const slowProbe = () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      });
+    plugin.start({ pollInterval: 60, probe: slowProbe });
+    plugin.stop();
+    answer({ state: "metered", ping: 700 });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(published("network.internet.state"), [null]);
+  });
+
+  test("a stop without a start publishes nothing", () => {
+    plugin.stop();
+    assert.deepStrictEqual(published("network.internet.state"), []);
+  });
+
   test("schema exposes the probe provider pulldown", () => {
     const prop = plugin.schema.properties.probeProvider;
     assert.ok(prop, "probeProvider option exists");

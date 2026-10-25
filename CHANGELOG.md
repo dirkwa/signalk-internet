@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A **Connectivity Probe** pulldown in the plugin configuration (#2): **Apple** (default, unchanged), **Google**, or **No probe**. Google sends a plain HTTP request to `connectivitycheck.gstatic.com/generate_204` and expects status 204 — no TLS handshake and no response body, cheaper on metered uplinks, and captive-portal redirects are detected as HTTP 3xx instead of TLS certificate failures. **No probe** never contacts an outside service: the state is taken on trust from hardware mappings (Starlink, modem status) and contextual rules alone, defaulting to `offline` when none matches, and manual overrides are gated on the hardware mappings.
 
+### Fixed
+
+- **The state no longer outlives the plugin.** Signal K keeps a path's last value after the plugin that published it stops, so disabling the plugin while the link was `metered` or `offline` left that state in place until the server restarted, and plugins that pause downloads on it stayed paused. Stopping now publishes `null` for `network.internet.state` and `network.internet.ping`, and a probe still in flight when the plugin stops no longer publishes its result afterwards.
+
 ### Changed
 
 - Probing internals are provider-based: the probe resolves the selected provider's hostname and decides online/captive from the HTTP status (Google) or response body (Apple), using `node:http` for plain-HTTP endpoints and never following redirects.

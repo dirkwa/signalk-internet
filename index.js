@@ -268,6 +268,9 @@ module.exports = (app) => {
        * @param {number|null} ping - Round-trip latency in ms
        */
       function publish(state, ping) {
+        // A probe still in flight when the plugin stopped must not put a
+        // state back after `stop()` has cleared it.
+        if (!running) return;
         app.handleMessage(PLUGIN_ID, {
           context: "vessels.self",
           updates: [
@@ -408,12 +411,32 @@ module.exports = (app) => {
     },
 
     stop: () => {
+      const wasRunning = running;
       running = false;
       clearProbeTimer();
       for (const f of unsubscribes) f();
       unsubscribes.length = 0;
       evaluator = null;
       speedTestFn = null;
+      // Signal K keeps a path's last value after the plugin that published
+      // it stops. A `metered` or `offline` left behind would hold whatever
+      // waits on it until the server restarts, so the state and the ping
+      // are cleared: no value means nobody is reporting on the link.
+      if (wasRunning) {
+        app.handleMessage(PLUGIN_ID, {
+          context: "vessels.self",
+          updates: [
+            {
+              source: { label: PLUGIN_ID, src: "internet" },
+              timestamp: new Date().toISOString(),
+              values: [
+                { path: STATE_PATH, value: null },
+                { path: PING_PATH, value: null },
+              ],
+            },
+          ],
+        });
+      }
       setStatus("Internet monitor stopped");
     },
   };

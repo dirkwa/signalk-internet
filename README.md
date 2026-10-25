@@ -5,6 +5,8 @@ This plugin serves as an internet connectivity monitor for Signal K. Many Signal
 * `network.internet.state`: `online`, `offline`, `metered`
 * `network.internet.ping`: round-trip ping time to a verification endpoint
 
+Both are set to `null` when the plugin stops, so a plugin that waits while the link is `metered` or `offline` is not left waiting on a value nobody updates any more.
+
 In addition to its own detection logic, the plugin can read status from uplink-specific provider plugins. Examples:
 
 * signalk-starlink sets `network.providers.starlink.status` to `online` when Starlink is connected

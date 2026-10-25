@@ -25,6 +25,8 @@ The plugin broadcasts under a custom `network.internet` namespace. To keep the h
 | `network.internet.state` | `string` | `online`, `offline`, `metered`, `captive` | Unified global internet connectivity state. |
 | `network.internet.ping` | `number` | `ms` | Round-trip latency to verification endpoint. |
 
+When the plugin stops, both paths are published as `null`: no value means nobody is reporting on the link.
+
 ### Delta Payload Example
 
 ```json
